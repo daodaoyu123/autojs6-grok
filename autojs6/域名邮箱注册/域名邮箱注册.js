@@ -14,7 +14,9 @@ function pickEmail() {
 }
 var RUNID = String(Date.now());
 var GROK = "/storage/emulated/0/Hermes工作区/grok";
-var REG = "/storage/emulated/0/Auto js6/域名邮箱注册";
+// 脚本目录自适应：优先 Auto.js 下的新位置，回退仓库默认位置（目录可能被挪动）
+var REG = "/storage/emulated/0/Auto.js/Auto js6/域名邮箱注册";
+try { if (!files.exists(REG)) REG = "/storage/emulated/0/Auto js6/域名邮箱注册"; } catch (e) {}
 var LOG = REG + "/log/grok_signup_webview.log";
 var ACCOUNTS = GROK + "/grok_accounts.txt";
 var SSO_OUT = GROK + "/sso_from_autojs.txt";
