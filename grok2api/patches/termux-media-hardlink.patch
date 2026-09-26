@@ -1,0 +1,48 @@
+diff --git a/backend/internal/infra/media/local_store.go b/backend/internal/infra/media/local_store.go
+index 58d1625..bd8e66b 100644
+--- a/backend/internal/infra/media/local_store.go
++++ b/backend/internal/infra/media/local_store.go
+@@ -105,7 +105,7 @@ func (s *LocalStore) CommitVideoUpload(ctx context.Context, tempPath, storageKey
+ 	if err := file.Close(); err != nil {
+ 		return err
+ 	}
+-	if err := os.Link(tempPath, path); err != nil {
++	if err := commitNoReplace(tempPath, path); err != nil {
+ 		return fmt.Errorf("提交视频文件: %w", err)
+ 	}
+ 	if cleanupErr := s.removeTemporary(tempPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+@@ -168,7 +168,8 @@ func (s *LocalStore) saveObject(ctx context.Context, kindDir, tempPattern, id, m
+ 		return "", fmt.Errorf("关闭媒体文件: %w", err)
+ 	}
+ 	// 硬链接提交具有 no-replace 语义，极端 ID 冲突时不会覆盖已有对象。
+-	if err := os.Link(temporaryPath, path); err != nil {
++	// Android/Termux 等环境禁止创建硬链接（SELinux），失败时退化为 rename。
++	if err := commitNoReplace(temporaryPath, path); err != nil {
+ 		return "", fmt.Errorf("提交媒体文件: %w", err)
+ 	}
+ 	cleanupErr := s.removeTemporary(temporaryPath)
+@@ -176,6 +177,24 @@ func (s *LocalStore) saveObject(ctx context.Context, kindDir, tempPattern, id, m
+ 	return storageKey, nil
+ }
+ 
++// commitNoReplace 优先硬链接提交（no-replace）；环境不允许硬链接时（如 Android/Termux 的 SELinux）
++// 退化为「预检查 + rename」，保持不覆盖已有对象的语义。
++func commitNoReplace(src, dst string) error {
++	linkErr := os.Link(src, dst)
++	if linkErr == nil {
++		return nil
++	}
++	if _, statErr := os.Stat(dst); statErr == nil {
++		return fmt.Errorf("目标已存在（且硬链接不可用: %v）", linkErr)
++	} else if !errors.Is(statErr, os.ErrNotExist) {
++		return statErr
++	}
++	if renameErr := os.Rename(src, dst); renameErr != nil {
++		return fmt.Errorf("%w（硬链接回退失败: %v）", renameErr, linkErr)
++	}
++	return nil
++}
++
+ func (s *LocalStore) Open(ctx context.Context, storageKey string) (io.ReadCloser, error) {
+ 	if err := ctx.Err(); err != nil {
+ 		return nil, err
