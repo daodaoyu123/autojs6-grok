@@ -58,7 +58,7 @@ function watchState() {
         var last = seg.length ? seg[seg.length - 1] : (lines.length ? lines[lines.length - 1] : "");
         st = runid ? "等待接收验证码" : "守望空闲";
         if (last.indexOf("等待接收验证码") >= 0 || last.indexOf("持续取码") >= 0) st = "等待接收验证码";
-        var sm = last.match(/第(\d+)次搜索.*?(命中|无)/);
+        var sm = last.match(/第(\d+)次\s*[\d.]+s\s*(?:推送)?(命中|无)/);
         if (last.indexOf("提取验证码") >= 0 || last.indexOf("等验证码") >= 0 || sm) st = sm ? ("提取验证码 · 第" + sm[1] + "次 · " + sm[2]) : "提取验证码";
         if (last.indexOf("提取成功") >= 0) { var okm = last.match(/提取成功[:：]?\s*(\S+)/); st = "提取成功" + (okm ? " " + okm[1] : ""); }
         if (last.indexOf("写入验证码") >= 0 || last.indexOf("CODE_WRITTEN") >= 0) {

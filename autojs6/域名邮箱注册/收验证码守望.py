@@ -22,7 +22,16 @@ import re
 import time
 from email.header import decode_header
 
-REG = os.environ.get("OTP_REG_DIR", "/storage/emulated/0/Auto js6/域名邮箱注册")
+def _default_reg():
+    # [路径自适应] 目录可能被挪到 Auto.js 下，取第一个真实存在的
+    for p in ("/storage/emulated/0/Auto.js/Auto js6/域名邮箱注册",
+              "/storage/emulated/0/Auto js6/域名邮箱注册"):
+        if os.path.isdir(p):
+            return p
+    return "/storage/emulated/0/Auto.js/Auto js6/域名邮箱注册"
+
+
+REG = os.environ.get("OTP_REG_DIR") or _default_reg()
 WANT = REG + "/log/otp_want.txt"
 SECRET = os.environ.get("OTP_QQ_SECRET", os.path.expanduser("~/.config/himalaya/qq.secret"))
 
@@ -43,6 +52,11 @@ SCAN = 10
 PUSH_WAIT = 1
 IDLE_WAIT = 5
 
+# [用户要求 2026-09-26] 守望只扫垃圾箱，不看 INBOX。
+# 前提：x.ai 的邮件必须被 QQ 收信规则送进垃圾箱（否则会漏码）。
+# 若发现漏码：先查 INBOX 里有没有 x.ai 的来信 —— 有则说明收信规则失效。
+BOXES = ("Junk",)
+
 
 def header_text(value):
     out = ""
@@ -61,17 +75,22 @@ def connect():
 
 
 def supports_idle(client):
+    # [3.13 兼容] 标准库 imaplib 的 IDLE 支持自 Python 3.14 起才提供（client.idle()）；
+    # 3.13 及以下无该方法，降级为 noop 轮询路径（本函数下方 wait_push 已有该分支）。
+    if not hasattr(client, "idle"):
+        return False
     return b"IDLE" in client.capabilities or "IDLE" in client.capabilities
 
 
-def open_junk(client):
-    """关掉再打开垃圾箱（刷新），返回邮件总数；失败返回 None。"""
+def open_junk(client, name=None):
+    """关掉再打开指定邮箱文件夹（刷新），返回邮件总数；失败返回 None。默认 BOXES[0]。"""
+    box = name or BOXES[0]
     try:
         client.close()
     except imaplib.IMAP4.error:
         pass
     try:
-        typ, data = client.select("Junk")
+        typ, data = client.select(box)
     except imaplib.IMAP4.error:
         return None
     if typ != "OK":
@@ -99,29 +118,30 @@ def code_from_header(raw, target):
 
 
 def find_code(client, target):
-    """重开垃圾箱，扫最新几封。返回 (码, UID)。推送失败时的退路。"""
-    total = open_junk(client)
-    if not total or total <= 0:
-        return None, None
-    lo = max(1, total - SCAN + 1)
-    try:
-        typ, data = client.fetch("%d:%d" % (lo, total),
-                                 "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT TO DELIVERED-TO)])")
-    except imaplib.IMAP4.error:
-        return None, None
-    if typ != "OK" or not data:
-        return None, None
-    items = [x for x in data if isinstance(x, tuple)]
-    for meta, raw in reversed(items):
-        uid = None
+    """依次重开 BOXES 各箱，扫最新几封。返回 (码, UID)；命中时命中的箱保持打开（便于删信）。"""
+    for box in BOXES:
+        total = open_junk(client, box)
+        if not total or total <= 0:
+            continue
+        lo = max(1, total - SCAN + 1)
         try:
-            found = re.search(br"UID (\d+)", meta)
-            uid = found.group(1).decode("ascii") if found else None
-        except (AttributeError, IndexError):
+            typ, data = client.fetch("%d:%d" % (lo, total),
+                                     "(UID BODY.PEEK[HEADER.FIELDS (SUBJECT TO DELIVERED-TO)])")
+        except imaplib.IMAP4.error:
+            continue
+        if typ != "OK" or not data:
+            continue
+        items = [x for x in data if isinstance(x, tuple)]
+        for meta, raw in reversed(items):
             uid = None
-        code = code_from_header(raw, target)
-        if code:
-            return code, uid
+            try:
+                found = re.search(br"UID (\d+)", meta)
+                uid = found.group(1).decode("ascii") if found else None
+            except (AttributeError, IndexError):
+                uid = None
+            code = code_from_header(raw, target)
+            if code:
+                return code, uid
     return None, None
 
 
@@ -306,7 +326,11 @@ def main():
                 print("等待接收验证码", flush=True)
                 continue
             print("提取成功: %s" % code, flush=True)
-            open(out, "w", encoding="utf-8").write(code)
+            # 原子写：先写 tmp 再 rename，防止发起端（100ms 一跳）读到半个码
+            _tmp = out + ".tmp"
+            with open(_tmp, "w", encoding="utf-8") as _f:
+                _f.write(code)
+            os.replace(_tmp, out)
             print("写入验证码: %s" % code, flush=True)
             print("CODE_WRITTEN %s -> %s" % (code, out), flush=True)
             delete_uid(client, uid)
